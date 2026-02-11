@@ -1,0 +1,913 @@
+---
+title: "Digital Marketing Campaign Performance Analysis"
+author: "Eric Turba"
+date: "2026-01-30"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Digital Marketing Campaign Performance Analysis
+
+## Context and Objective
+
+This analysis examines social media campaign data from XYZ company run on Facebook (Meta). **Ideally, we would have revenue return data to calculate the actual ROI of each campaign.** However, since we don't have this information, we'll treat this problem as a **cost optimization exercise.**
+
+Our objectives are:
+
+-   Identify and cut campaigns with high spending and low performance
+-   Discover demographic and segmentation patterns that work
+-   Recommend adjustments to maximize investment efficiency
+
+The file contains 1,143 observations distributed across 11 variables:
+
+1.  **ad_id**: Unique identifier for each ad
+2.  **xyz_campaign_id**: XYZ company campaign ID
+3.  **fb_campaign_id**: Facebook campaign tracking ID
+4.  **age**: Target audience age range
+5.  **gender**: Target audience gender
+6.  **interest**: Interest category code
+7.  **Impressions**: Total number of times the ad was shown
+8.  **Clicks**: Total number of times users clicked on the ad
+9.  **Spent**: Total amount of money invested by XYZ Company to run the ad
+10. **Total_Conversion**: Total number of people who showed interest in the product after viewing the ad
+11. **Approved_Conversion**: Total number of people who completed a purchase after engaging with the ad
+
+First, we will load the necessary libraries for this project:
+
+```{r 1}
+# Loading Libraries
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(skimr)
+library(DataExplorer)
+library(gridExtra)
+library(scales)
+library(colorspace)
+```
+
+Next, we'll standardize plot dimensions to a default width and height to improve readability and visual clarity
+
+```{r 2}
+options(repr.plot.width = 15, repr.plot.height = 10)
+```
+
+Before we start the analysis, we will create a conversion funnel. The following source was used to assist in the creation process: <https://gist.github.com/jjesusfilho/fd14b58becab4924befef5be239c6011>
+
+This funnel will be used to visually represent how users move through different stages of a digital marketing campaign, for example, from seeing an ad (impressions) to clicking it, showing interest, and finally making a purchase. This type of visualization helps quickly identify where audience drop-offs occur in the conversion process, making it easier to pinpoint inefficiencies in campaign performance.
+
+We will utilize this funnel later in our analysis.
+
+```{r 3}
+# Function to create conversion funnel charts
+# Source: https://gist.github.com/jjesusfilho/fd14b58becab4924befef5be239c6011
+
+gg_funnel <- function(x, text = NULL, color = NULL, lbl_size = 4){
+  
+  ### Type Validation ###
+  if (!is.numeric(x)){
+    stop("x must be a numeric vector")
+  }
+  
+  if (any(x < 0)){
+    stop("This function does not accept negative values")
+  }
+  
+  x <- sort(x, decreasing = TRUE)
+  
+  if (is.null(color)){
+    color <- colorspace::qualitative_hcl(length(x), palette = "Dark 3")
+  }
+  
+  if (is.null(text)){
+    text <- as.character(x)
+  }
+  
+  if(!all.equal(length(x), length(text), length(color))){
+    stop("x, text, and color must have the same length")
+  }
+  
+  ### Create x coordinates ###
+  l1 <- vector("list", length(x))
+  
+  for (i in 1:length(x)){
+    if (i == 1){
+      x3 <- x[1]
+      x4 <- 0
+      x1 <- seq(x4, x3, length.out = 6)[2]
+      x2 <- seq(x4, x3, length.out = 6)[5]
+    } else {
+      x4 <- l1[[i-1]][1]
+      x3 <- l1[[i-1]][2]
+      x1 <- seq(x4, x3, length.out = 6)[2]
+      x2 <- seq(x4, x3, length.out = 6)[5]
+    }
+    
+    l1[[i]] <- c(x1, x2, x3, x4)
+  }
+    
+  ### Create y coordinates ###
+  l2 <- purrr::map(length(x):1, ~{
+    c(.x*5-5, .x*5-5, .x*5, .x*5)
+  })
+  
+  ## Create data.frame based on coordinates ###
+  dfs <- purrr::map2(l1, l2, ~{
+    data.frame(x = .x, y = .y)
+  })
+  
+  ### Create individual plots and stack them ###
+  p <- ggplot2::ggplot()
+  
+  for (i in 1:length(dfs)){
+    p<- p +
+      ggplot2::geom_polygon(data = dfs[[i]], ggplot2::aes(x = x, y = y),
+                            fill = color[i]) +
+      ggplot2::annotate("text", label = text[i], x = x[1]/2,
+                        y = mean(dfs[[i]]$y),
+                        size = lbl_size,
+                        fontface = "bold",
+                        color = "black") +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(
+        axis.title = ggplot2::element_blank(),
+        axis.text = ggplot2::element_blank(),
+        axis.ticks = ggplot2::element_blank(),
+        panel.grid = ggplot2::element_blank()
+      )
+  }
+    
+    p
+}
+```
+
+Once the funnel is created, we will now load the data.
+
+```{r 4}
+# Loading data
+df <- read_csv("KAG_conversion_data.csv")
+```
+
+The next few steps will allow us to get an introduction into the data set.
+
+```{r 5}
+# Data structure overview
+glimpse(df)
+```
+
+```{r 6}
+# First rows of the dataset
+head(df)
+```
+
+```{r 7}
+# Complete statistical summary
+df %>% skimr::skim() %>% print()
+```
+
+Now let's get an introductory visualization of data quality.
+
+This plot tells us how many variables are continuous versus discrete and what proportion of rows and cells contain missing values. This will serve as an initial data quality check before getting into exploratory analysis.
+
+```{r 8}
+# Introductory visualization of data quality 
+plot_intro(df)
+```
+
+To begin our exploratory analysis, let's look at the distribution of ads by campaign:
+
+```{r 9}
+# Distribution of ads by campaign
+df %>% 
+  group_by(xyz_campaign_id) %>% 
+  summarise(total = n())
+```
+
+## Exploratory Analysis: Distribution by Campaign
+
+We observe that **Campaign 916** had a much lower volume of ads compared to the others, while **Campaign 1178** had the most ads. **Campaign 916** only having **54** ads seems like an outlier compared to **Campaign 936** and **Campaign 1178** which had **464** and **625** ads respectfully.
+
+Let's investigate how age groups are distributed in the database and how they fare in each campaign.
+
+```{r 10}
+# General distribution by age range
+df %>% 
+  group_by(age) %>% 
+  summarise(total = n())
+```
+
+## Age Concentration
+
+Approximately **60% of the database** is concentrated in the **30-39 years** range with the age range between **30-34** being the highest at **426**.
+
+How are these groups distributed when we consider each campaign individually?
+
+```{r 11}
+# Age distribution by campaign
+df %>% 
+  group_by(xyz_campaign_id, age) %>% 
+  summarise(total = n(), .groups = "drop_last") %>% 
+  mutate(percentage = round(total * 100 / sum(total), 2))
+```
+
+## Age Segmentation Pattern
+
+All campaigns focus predominantly on the **30-34 years** range, with the difference being less pronounced in **Campaign 1178** where **32.2%** of ads were focused on that age range which is the lowest percentage compared to the other two campaigns.
+
+Now let's analyze how genders are distributed when we consider campaign and age range simultaneously.
+
+```{r 12}
+# General distribution by gender
+df %>% 
+  group_by(gender) %>% 
+  summarise(total = n())
+```
+
+## Gender Balance
+
+The distribution between genders is quite balanced, with a slightly higher numbers of ads going towards the **male** audience.
+
+Now let's break it down by campaign.
+
+```{r 13}
+# Gender distribution by campaign
+df %>% 
+  group_by(xyz_campaign_id, gender) %>% 
+  summarise(total = n(), .groups = "drop_last") %>% 
+  mutate(percentage = round(total * 100 / sum(total), 2))
+```
+
+## Difference in Campaign 936
+
+Only **Campaign 936** shows a higher overall percentage of **women** with **55.2%** of ads being directed towards **women**.
+
+What if we include age ranges in this analysis?
+
+```{r 14}
+# Visualization: Gender distribution by age and campaign
+df %>% 
+  group_by(xyz_campaign_id, age, gender) %>% 
+  summarise(total = n(), .groups = "drop_last") %>% 
+  mutate(percentage = round(total * 100 / sum(total), 2)) %>% 
+  ggplot(aes(x = age, y = percentage, fill = gender)) +
+  geom_col() +
+  geom_text(aes(label = paste0(percentage, "%")),
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  facet_wrap(~ xyz_campaign_id) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Gender Distribution by Age and Campaign",
+    y = "Proportion (%)",
+    x = "Age Range"
+  ) +
+  theme_minimal()
+```
+
+**Campaign 936** was spread out evenly for **men** and **women** in the age range **30-34** but targeted more **women** in all other age categories.
+
+**Campaign 1178** had a fairly even gender spread across age ranges with about **55%** of ads being directed towards **men** in each age range.
+
+## Introduction of Performance Metrics
+
+Now let's calculate standard digital marketing metrics:
+
+-   **CTR(Click-Through Rate)**: The percentage of users who click on an ad after seeing it.
+-   **CPC(Cost Per Click)**: The average amount paid each time a user clicks on an ad.
+-   **CPA(Cost Per Acquisition)**: The average cost incurred for each completed conversion or sale.
+
+```{r 15}
+# Performance metrics calculation
+df <- df %>% 
+  mutate(
+    CTR = ifelse(Impressions > 0, (Clicks / Impressions) * 100, NA),
+    CPC = ifelse(Clicks > 0, Spent / Clicks, NA),
+    CPA = ifelse(Approved_Conversion > 0, Spent / Approved_Conversion, NA)         
+  )
+```
+
+Let's first verify that the columns have been created correctly:
+
+```{r 16}
+# Verification of new columns
+head(df, 3)
+```
+
+Now we will aggregate the performance metrics for each campaign in the data set and then we will create a series of funnel plots to visualize the performance of each campaign using the gg_funnel function that we created earlier.
+
+```{r 17}
+# Metrics aggregation by campaign 
+df_performance <- df %>% 
+  group_by(xyz_campaign_id) %>% 
+  summarise(
+    ads_run = n_distinct(ad_id),
+    investment = sum(Spent),
+    impressions = sum(Impressions),
+    clicks = sum(Clicks),
+    leads = sum(Total_Conversion),
+    sales = sum(Approved_Conversion),
+    ctr_global = (clicks / impressions) * 100,
+    cpc_global = investment / clicks,
+    lead_to_sale_rate = (sales / leads) * 100,
+    cpa_global = investment / sales,
+    .groups = "drop"
+  )
+```
+
+```{r 18}
+plot_list <- list()
+
+for(campaign in unique(df_performance$xyz_campaign_id)) {
+  
+  campaign_data <- df_performance %>% 
+    filter(xyz_campaign_id == campaign)
+  
+  funnel_vec <- c(
+  campaign_data$impressions,
+  campaign_data$clicks,
+  campaign_data$leads,
+  campaign_data$sales
+  )
+  
+texts<- c(
+  paste0("Imp: ", scales::comma(funnel_vec[1])),
+  paste0("Clicks: ", scales::comma(funnel_vec[2]), "\n(",
+         round(funnel_vec[2]/funnel_vec[1]*100, 2), "%)"),
+  paste0("Leads: ", funnel_vec[3], "\n(",
+         round(funnel_vec[3]/funnel_vec[2]*100, 2), "%)"),
+  paste0("Sales: ", funnel_vec[4], "\n(",
+         round(funnel_vec[4]/funnel_vec[3]*100, 2), "%)")
+)
+
+p <- gg_funnel(funnel_vec, text = texts) +
+  labs(
+    title = paste("Campaign", campaign),
+    subtitle = paste("CPA: $", round(campaign_data$cpa_global, 2))
+  ) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+  
+plot_list[[as.character(campaign)]] <- p
+}
+
+grid.arrange(grobs = plot_list, ncol = 3)
+```
+
+```{r 19}
+# Performance summary table
+print(df_performance)
+```
+
+## Preliminary Performance Insights
+
+**Campaign 916**: Shows low relative investment and few ads run, but has the **best lead→sale conversion rate** and consequently the **lowest CPA**. This may be the result of efficient segmentation, good niche choice (interest) or simply statistical luck. Given the small sample size (compared to the other campaigns) it is tough to come away with any conclusions.
+
+**Campaign 1178**: Shows a huge investment was done for the campaign and in turn, generated by far the most **impressions, clicks, leads, and sales** compared to the other campaigns. However, **Campaign 1178** also showed a **CPA over 4x worse** than other campaigns. The campaign did have a similar **lead→sale conversion rate** compared to **Campaign 936** at **32.67%**.
+
+### Question to Investigate:
+
+-   Are there differences in interests that were targeted in **Campaign 916** compared to the interests that were targeted in **Campaign 1178**?
+-   In **Campaign 1178**, did some ads perform well but were "pulled down" by others resulting in the higher CPA?
+-   Are there specific patterns of **interests** and **ages** that explain the differences between the success of one ad to the next?
+
+To further our analysis, let's group the ads based on interest and campaign and then we'll aggregate the performance metrics.
+
+Then, we'll create a matrix style graph which shows the sales volume and CPA for interest code in each ad campaign. The goal is to understand **where campaigns invested, which interests generated sales, and how cost-efficient those investments were**.
+
+```{r 20}
+# Performance analysis by interest and campaign
+interest_analysis <- df %>%
+  mutate(xyz_campaign_id = as.character(xyz_campaign_id)) %>%
+  group_by(interest, xyz_campaign_id) %>%
+  summarise(
+    sales = sum(Approved_Conversion),
+    cpa = sum(Spent) / sum(Approved_Conversion),
+    .groups = "drop"
+  ) %>%
+  filter(sales > 0)
+
+# Visualization: Interest matrix
+ggplot(interest_analysis, aes(x = xyz_campaign_id, y = as.factor(interest))) +
+  geom_point(aes(size = sales, color = cpa)) +
+  scale_color_gradient(low = "green", high = "red") +
+  labs (
+    title = "Interest Matrix: Where Did Campaigns Invest?",
+    y = "Interest Code",
+    x = "Campaign",
+    color = "CPA ($)",
+    size = "Sales Vol."
+  ) +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_blank())
+```
+
+## Interest Analysis
+
+### Campaign 1178 drove the majority of volume — but at a cost
+
+From the prior analysis, we already knew **Campaign 1178** was the highest spender and that was confirmed by the matrix as the campaign had by far the most bubbles and the largest bubbles overall. What we did learn from the matrix is that **Campaign 1178** has a broad investment across many interest segments. However, many of these high-volume bubbles skew yellow to red including some of the bubbles with the highest sales volume.
+
+### Campaign 916 shows limited investment and narrow impact
+
+Likewise, we already knew from the prior analysis that **Campaign 916** had the lowest investment and the matrix now proves that the campaign had a narrow scope as few interests were tested, however, all interests performed well and were in the green.
+
+### Campaign 936 seems to be cost-efficient overall
+
+Most bubbles under **Campaign 936** were green and the CPA is consistently low across many interest segments. Additionally, Several interests show moderate sales volume with strong efficiency. Campaign 936 appears well-optimized, balancing conversion volume with low acquisition cost.
+
+### Diminishing returns appear in high-volume interests
+
+The largest bubbles in **Campaign 1178** are often orange/red. This suggests that as spending increased, CPA increased.
+
+Will including age groups in our segmentation allow us to extract more robust insights?
+
+Let's first identify the top 5 interests by spending across all campaigns.
+
+```{r 21}
+# Identification of top 5 interests by spending
+top_interest_codes <- df %>% 
+  group_by(interest) %>% 
+  summarise(spending = sum(Spent)) %>% 
+  slice_max(spending, n = 5) %>% 
+  pull(interest)
+```
+
+```{r 22}
+#Display of most invested interest codes
+top_interest_codes %>% print()
+```
+
+Now, we will create a heat map showing the CPA for each interest in relation to the age group that it was targeting. This graph will hopefully provide us insights into what interests performed better or worse for certain age groups.
+
+```{r 23}
+# Heatmap: Interest x age x campaign saturation
+cpa_colors <- c("#1a9641", "#ffffbf", "#d7191c")
+
+df %>% 
+  filter(interest %in% top_interest_codes) %>% 
+  group_by (xyz_campaign_id, interest, age) %>% 
+  summarise(
+    cpa = sum(Spent) / sum(Approved_Conversion),
+    sales = sum(Approved_Conversion),
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(x = age, y = as.factor(interest), fill = cpa)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = sales), color = "black", size = 3, fontface = "bold") +
+  facet_wrap(~ xyz_campaign_id) +
+  scale_fill_gradientn(
+    colors = cpa_colors,
+    name = "CPA ($)"
+  ) +
+  labs(
+    title = "Saturation: Interest x Age x Campaign",
+    subtitle = "Color: Cost per Sale (Green = Cheap, Red = Expensive)\nNumber: Total Sales",
+    y = "Interests (Top 5)",
+    x = "Age Range"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+## Identified Pattern: 30-34 Range
+
+The **30-34 years** range seems to perform consistently better across all campaigns, converting more with a lower CPA.
+
+We need to drill down to the individual ad level to see if there are extremely expensive ads that don't generate returns and waste XYZ company resources.
+
+## Ad Classification by Performance
+
+I adopted the following classification for each ad using the **base average CPA (\~\$40)** and the number of conversions:
+
+-   **Zombie (Spends and doesn't sell)**: Didn't convert anyone and cost more than \$50
+-   **Star (Cheap)**: Produced sales & CPA below base average
+-   **Expensive (Needs Optimization):**: Produced sales & CPA above base average
+-   **In Test**: Spending too low to classify
+
+Now let's aggregate the data set and classify each ad into one of the four above categories. After that is complete, we will create a visualization showing the total sales for each individual ad along with the amount spent on each ad.Specifically, we are looking for **Zombie Ads** which are wasting the company money. Any Zombie ad should be paused immediately.
+
+```{r 24}
+# Data aggregation by ad
+df_ads <- df %>% 
+  group_by(ad_id, xyz_campaign_id) %>% 
+  summarise(
+    spent = sum(Spent),
+    impressions = sum(Impressions),
+    clicks = sum(Clicks),
+    sales = sum(Approved_Conversion),
+    ctr = (sum(Clicks) / sum(Impressions)) * 100,
+    cpa = ifelse(sales > 0, spent / sales, NA),
+    .groups = "drop"
+  )
+
+# Ad classification
+df_ads <- df_ads %>% 
+  mutate(
+    status = case_when(
+      (sales == 0 & (spent > 50 | is.na(spent))) ~ "Zombie (Spends and doesn't sell)",
+      cpa < 40 ~ "Star (Cheap)",
+      cpa >= 40 ~ "Expensive (Needs Optimization)",
+      TRUE ~ "In Test (Low Relative Spending)"
+    )
+  )
+
+# Visualization: Ad audit
+df_ads %>% 
+  filter(spent > 0) %>%  
+  ggplot(aes(x = spent, y = sales, color = status)) +
+  geom_point(alpha = 0.6, size = 2) +
+  facet_wrap(~ xyz_campaign_id, scales = "free") +
+  scale_color_manual(values = c(
+    "Star (Cheap)" = "green4",
+    "Expensive (Needs Optimization)" = "orange",
+    "Zombie (Spends and doesn't sell)" = "red",
+    "In Test (Low Relative Spending)" = "grey"
+  )) +
+  labs(
+    title = "Ad Audit (ad_id)",
+    subtitle = "Red dots should be paused immediately",
+    x = "Total Investment ($)",
+    y = "Total Sales"
+  ) +
+  theme_minimal()
+```
+
+## Alert: Zombie Ads
+
+There are many ads to pause in **Campaign 1178** and several to optimize. **Campaign 936** also has a significant number of problematic ads.
+
+Let's list the zombie ads with a recommendation to completely pause them, and segment the "star" ads to understand where we got it right. First, we'll count the quantity and total spent for the zombie ads for each campaign.
+
+```{r 25}
+# Counting zombie ads by camaign 
+df_ads %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  group_by(xyz_campaign_id) %>% 
+  summarise(
+    qty_zombies = n(),
+    total_spent = sum(spent)
+  )
+```
+
+## Savings Opportunity
+
+If XYZ company paused **today** all **87 zombie ads**, the immediate savings would be **\$10,442**.
+
+Let's examine the top 10 to identify the biggest wasters.
+
+```{r 26}
+# Top 10 zombie ads by spending
+df_ads %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  arrange(desc(spent)) %>% 
+  select(ad_id, xyz_campaign_id, spent, impressions, clicks) %>% 
+  head(10)
+```
+
+## Waste Concentration
+
+The **top 10** zombie ads represent just over **30% of total spending** wasted in this category. That is a lot of waste centered around a few specific ads.
+
+Let's dig deeper and determine if there is a difference in demographic profile between who the star ads and the zombie ads are targeting. We've already determined that the **30-34 years** range is promising, I wonder if the star ads targeted more of the younger audience while the zombie ads targeted the higher age range.
+
+We will create a visualization to compare the two types of ads by the age range they targeted and the gender.
+
+```{r 27}
+# Joining original data with status classification
+df_classified <- df %>% 
+  inner_join(df_ads %>%  select(ad_id, status, cpa), by = "ad_id")
+
+# Comparison: Stars vs Zombies by demographic profile
+df_classified %>% 
+  filter(status %in% c("Star (Cheap)", "Zombie (Spends and doesn't sell)")) %>% 
+  group_by(status, age, gender) %>% 
+  summarise(total = n(), .groups = "drop") %>% 
+  ggplot(aes(x = age, y = total, fill = gender)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ status) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Battle of Profiles: Stars vs Zombies",
+    subtitle = "Where are Zombies missing the mark? (Probabely wrong audience)",
+    y = "Number of Ads Run",
+    x = "Age Range"
+  ) +
+  theme_minimal()
+```
+
+## Clear Demographic Pattern
+
+Our hypothesis seems to be correct:
+
+**Star Ads**:
+
+-   Target the **30-34 years** range (already identified earlier as promising)
+-   Focus more on **male** audience
+
+**Zombie Ads**:
+
+-   Focus a higher percentage on the **40-49 years** range (compared to the star ads)
+-   Focus more on the **female** audience overall
+
+This suggests the problem could be either the age range or the gender they are targeting.
+
+Given the significant disparity in the age range that each type of ad targeted, I hypothesize the problem relates more towards the age range the ads are targeting compared to the gender.
+
+Let's now analyze how Star and Zombie ads differ in **interest** segmentation.
+
+We will first group the top 10 interests by the amount invested for each type of ad (Star & Zombie). Then we will visualize if the highest investments were in similar interests for the star and zombie ads.
+
+```{r 28}
+# Identification of top 10 interests in each cluster
+top_interest_stars <- df_classified %>% 
+  filter(status == "Star (Cheap)") %>% 
+  group_by(interest) %>% 
+  summarise(value = sum(Approved_Conversion)) %>% 
+  mutate(
+    type = "Stars (Focus: Sales)",
+    share = value / sum(value)
+  ) %>% 
+  slice_max(share, n = 10)
+
+top_interests_zombies <- df_classified %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  group_by(interest) %>% 
+  summarise(value = sum(Spent)) %>% 
+  mutate(
+    type = "Zombies (Focus: Waste)",
+    share = value / sum(value)
+  ) %>% 
+  slice_max(share, n = 10)
+
+# Ordering based on star success
+interest_order <- top_interest_stars %>% 
+  arrange(share) %>% 
+  pull(interest)
+
+
+# Data preparation for visualization
+plot_data <- bind_rows(top_interest_stars, top_interests_zombies) %>% 
+  mutate(interest = factor(interest, levels = interest_order)) %>% 
+  filter(!is.na(interest))
+
+# Comparative visualization
+ggplot(plot_data, aes(x = interest, y = share, fill = type)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ type, scales = "free_x") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("forestgreen", "firebrick")) +
+  labs(
+    title = "Share Comparison: Where Do Resources Go?",
+    subtitle = "Interests ordered by Star success\nSee if your Top Sellers are also the biggest wastes in Zombies",
+    x = "Interest Code (Ordered by Success)",
+    y = "Share (%)",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Interest Overlap
+
+It's notable that the **top 4 spending percentages** for Star ads were also high spenders for Zombie ads.This is especially evident with **Interest 16** which was the largest spender for the Star ads and was also about 10% of the investment for Zombie ads.
+
+This reinforces the idea that the differences in success between the two groups of ads is due to the difference in **age segmentation** (40-49 years vs 30-34 years), not the interests themselves.
+
+Let's identify which interests work well when properly segmented but fail when applied to the wrong audience. In order to do this, we will make a matrix graph which shows the **risk vs reward** for interests
+
+**X-axes (Stars)** - How good this interest is when it works
+
+**Y-axis (Zombies)** - How expensive this interest is when it fails
+
+Each point will show us **when this interest works, how much do we gain and when it doesn’t, how much do we burn?**
+
+```{r 29}
+# Identification of common interests between stars and zombies
+common_interests <- df_classified %>% 
+  group_by(interest) %>% 
+  summarise(
+    star_sales = sum(Approved_Conversion[status == "Star (Cheap)"]),
+    zombie_spent = sum(Spent[status == "Zombie (Spends and doesn't sell)"]),
+    .groups = "drop"
+  ) %>% 
+  filter(star_sales > 0, zombie_spent > 0)
+
+# Median calucation for quadrants
+median_sales <- median(common_interests$star_sales)
+median_spent <- median(common_interests$zombie_spent)
+
+# Visualization: Potential vs waste matrix
+ggplot(common_interests, aes(x = star_sales, y = zombie_spent)) +
+  annotate("rect", xmin = median_sales, xmax = Inf, ymin = median_spent, ymax = Inf,
+           fill = "orange", alpha = 0.1) +
+  annotate("rect", xmin = median_sales, xmax = Inf, ymin = -Inf, ymax = median_spent,
+           fill = "green", alpha = 0.1) +
+  geom_point(color = "purple", size = 3, alpha = 0.7) +
+  geom_text(aes(label = interest), vjust = -0.5, size = 3, check_overlap = TRUE) +
+  geom_vline(xintercept = median_sales, linetype = "dashed") +
+  geom_hline(yintercept = median_spent, linetype = "dashed") +
+  annotate("text", x = max(common_interests$star_sales),
+           y = max(common_interests$zombie_spent),
+           label = "Adjust Segmentation", hjust = 1, vjust = 1,
+           fontface = "bold", size = 3) +
+  annotate("text", x = max(common_interests$star_sales), y = 0,
+           label = "Scale", hjust = 1, vjust = 0, fontface = "bold", size = 3) +
+  labs(
+    title = "Common Interests Matrix: Where to Adjust?",
+    subtitle = "X-axis: Sales Potential (Stars) | Y-axis: Cost of Error (Zombies)",
+    x = "Sales Volume (When It Works)",
+    y = "Money Wasted (When It Fails)"
+  ) +
+  theme_minimal()
+```
+
+## Critical Insights
+
+Based on the graph, we can identify how successful the interests are and answer the question of **which interests are failing because they’re bad and which are failing because they’re misused?**
+
+We'll want to characterize each interest by the following:
+
+-   **Bad interests** → cut them
+
+-   **Good but misused interests** → adjust segmentation
+
+-   **Good and efficient interests** → scale hard
+
+Let's look at each quadrant specifically:
+
+**Bottom-right — Scale**
+
+-   **High sales, low waste**
+-   These interests convert well and don't burn much budget when they fail
+-   We should look to increase spending on these interests
+
+**Top-right — Adjust Segmentation**
+
+-   **High sales, high waste**
+-   These interests can clearly work but are expensive when they are mis-targeted
+-   We should look to tighten targeting around these interests
+
+**Bottom-left — Ignore or deprioritize**
+
+-   **Low sales, low waste**
+-   These interests are safe but unimpactful
+-   We are fine to pause or keep with minimal budget
+
+**Top-left — Cut**
+
+-   **Low sales, high waste**
+-   Limited upside and real downside
+-   We should kill off or completely rethink these interests
+
+## Statistical Validation: Difference by Age Range
+
+Next, let's look to see if we can validate our observation that the **30-34** age range performs better than the other age ranges. To do so, we will determine if the **30-34** age range is **statistically different** from the others in terms of conversion rate.
+
+```{r 30}
+# Data preparation for statistical test
+age_data_general <- df %>% 
+  group_by(age) %>% 
+  summarise(
+    sales = sum(Approved_Conversion),
+    non_sales = sum(Clicks) - sum(Approved_Conversion),
+    total_attempts = sum(Clicks)
+  )
+
+sales <- age_data_general$sales
+attempts <- age_data_general$total_attempts
+
+names(sales) <- age_data_general$age
+names(attempts) <- age_data_general$total_attempts
+
+# Pairwise proportion test with Bonferroni correction
+age_test_corrected <- pairwise.prop.test(
+  x = sales,
+  n = attempts,
+  p.adjust.method = "bonferroni"
+)
+
+print(age_test_corrected)
+```
+
+## Result: Statistical Difference Confirmed
+
+The **30-34 years** range is **statistically different** from other age ranges in terms of conversion rate (p \< 0.05 after Bonferroni correction) so we can reject the null hypothesis.
+
+This validates our previous qualitative observation.
+
+## Statistical Validation: Difference by Gender
+
+Now let's do a separate statistical test to determine if there is a significant difference in **CPA trend** between genders?
+
+```{r 31}
+# Data preparation (only ads that converted)
+cpa_gender_data <- df %>% 
+  filter(Approved_Conversion > 0) %>% 
+  mutate(cpa = Spent / Approved_Conversion)
+
+# Kruskal-Wallis non-parametric test
+kruskal.test(cpa ~ gender, data = cpa_gender_data)
+```
+
+```{r 32}
+# Visualization of CPA distribution by gender
+ggplot(cpa_gender_data, aes(x = gender, y = cpa)) +
+  geom_boxplot(fill = c("#F8766D", "#00BFC4"), alpha = 0.7) +
+  labs(
+    title = "Statistical Distribution of CPA by Gender",
+    x = "Gender",
+    y = "CPA ($)"
+  ) +
+  theme_minimal()
+```
+
+## Result: Cost Difference by Gender
+
+There is **statistical evidence** that **females** costs more than **males** to convert (p \< 0.05).
+
+It would be a smart idea to target **males** more heavily going forward.
+
+# Executive Report: Conclusions and Recommendations
+
+## 1. Executive Summary
+
+Data analysis identified that **Campaign 1178** shows a cost per sale drastically higher than other campaigns. The higher cost is not due to the marketing channel itself, but do to the **inefficiency in audience segmentation** and the **usage of ineffective ads**.
+
+There is a clear opportunity to **reduce costs while maintaining sales volume** by concentrating the budget on proven buyer demographic profiles.
+
+## 2. Problem Diagnosis
+
+We identified three main factors draining the company's budget:
+
+### 2.1. Demographic Dispersion
+
+**Campaign 1178** is spending significant budget on the **40-49 years** age range. Statistical tests confirm this group does not convert sales as efficiently as the **30-34 years** age range.
+
+### 2.2. Ads with Total Waste
+
+We mapped a group of **87 ads** (identified as "Zombies") that consistently consume budget without having generated **any sales**. The accumulation of these expenses represents **\$10,442** of total waste, with the top 10 accounting for **30%** of this amount.
+
+### 2.3. Inadequate Interest Segmentation
+
+Several interests that **work well** for the younger audience (30-34 years) are being shown to older audiences, where they don't perform, generating a **false negative** about the quality of these interests.
+
+## 3. High Performance Profile
+
+The ideal customer profile, which brings the **highest return on investment**, has the following characteristics:
+
+### Ideal Target Audience Characteristics:
+
+-   **Age Range**: **30 to 34 years** (statistically superior performance to all other ranges)
+-   **Behavior**: Specific interests (codes 29, 16, 10, 15, 20) when targeted to this young audience have shown to convert at low cost and at high frequency)
+-   **Gender Differentiation**: There is a statistically significant difference in CPA between genders, which should be considered in allocation
+
+## 4. Recommended Action Plan
+
+### 4.1. Short-Term Actions (Immediate Implementation)
+
+a)  Pause Inefficient Ads
+
+**Estimated savings: \$10,442**
+
+-   Immediately stop running the **87 Zombie ads** listed in the technical report
+-   Prioritize the top 10 that account for 30% of waste
+
+b)  Age Restriction
+
+-   Change **Campaign 1178** configuration to **exclude** ad display for the **40 to 49 years** range
+-   This range showed high cost without proportional return
+
+### 4.2. Medium-Term Actions (Strategic)
+
+a)  Budget Reallocation
+
+-   Direct the budget saved from the above actions to **intensify exposure** in the **30 to 34 years** range, where the probability of sale is proven higher
+
+b)  Focused Segmentation
+
+-   Create **new ad sets** focusing on the high-performance interests (29, 16, 10, 15, 20)
+-   Restrict these ads **exclusively to the 30 to 34 years audience** to avoid new waste
+-   Consider CPA difference by gender in proportional budget allocation (more budget to the male audience).
+
+c)  Continuous Testing and Learning
+
+-   Implement weekly monitoring of ads classified as "Expensive"
+-   Establish a **\$50 test spending limit** before classifying an ad as Zombie
+-   Create a quarterly review process to identify new promising interests
+
+## 5. Expected Impact
+
+With full implementation of recommendations, we estimate:
+
+-   **Immediate cost reduction**: \~\$10,442 (Zombie pause)
+-   **CPA improvement**: 40-50% reduction by focusing on 30-34 audience
+-   **Maintenance or increase in sales volume**: Through intelligent budget reallocation
+-   **Improved ROI**: Concentration on proven profitable segments
