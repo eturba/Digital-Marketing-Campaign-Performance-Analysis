@@ -25,3 +25,15 @@ The file contains 1,143 observations distributed across 11 variables:
 11. **Approved_Conversion**: Total number of people who completed a purchase after engaging with the ad
 
 First, we will load the necessary libraries for this project:
+
+```R
+# Loading Libraries
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(skimr)
+library(DataExplorer)
+library(gridExtra)
+library(scales)
+library(colorspace)
+```
