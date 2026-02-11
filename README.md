@@ -132,3 +132,105 @@ gg_funnel <- function(x, text = NULL, color = NULL, lbl_size = 4){
     p
 }
 ```
+
+Once the funnel is created, we will now load the data.
+
+```R
+# Loading data
+df <- read_csv("KAG_conversion_data.csv")
+```
+
+The next few steps will allow us to get an introduction into the data set.
+
+```R
+# Data structure overview
+glimpse(df)
+```
+
+```R
+# First rows of the dataset
+head(df)
+```
+
+```R
+# Complete statistical summary
+df %>% skimr::skim() %>% print()
+```
+
+Now let's get an introductory visualization of data quality.
+
+This plot tells us how many variables are continuous versus discrete and what proportion of rows and cells contain missing values. This will serve as an initial data quality check before getting into exploratory analysis.
+
+```R
+# Introductory visualization of data quality 
+plot_intro(df)
+```
+
+To begin our exploratory analysis, let's look at the distribution of ads by campaign:
+
+```R
+# Distribution of ads by campaign
+df %>% 
+  group_by(xyz_campaign_id) %>% 
+  summarise(total = n())
+```
+
+## Exploratory Analysis: Distribution by Campaign
+
+We observe that **Campaign 916** had a much lower volume of ads compared to the others, while **Campaign 1178** had the most ads. **Campaign 916** only having **54** ads seems like an outlier compared to **Campaign 936** and **Campaign 1178** which had **464** and **625** ads respectfully.
+
+Let's investigate how age groups are distributed in the database and how they fare in each campaign.
+
+```R
+# General distribution by age range
+df %>% 
+  group_by(age) %>% 
+  summarise(total = n())
+```
+
+## Age Concentration
+
+Approximately **60% of the database** is concentrated in the **30-39 years** range with the age range between **30-34** being the highest at **426**.
+
+How are these groups distributed when we consider each campaign individually?
+
+```R
+# Age distribution by campaign
+df %>% 
+  group_by(xyz_campaign_id, age) %>% 
+  summarise(total = n(), .groups = "drop_last") %>% 
+  mutate(percentage = round(total * 100 / sum(total), 2))
+```
+
+## Age Segmentation Pattern
+
+All campaigns focus predominantly on the **30-34 years** range, with the difference being less pronounced in **Campaign 1178** where **32.2%** of ads were focused on that age range which is the lowest percentage compared to the other two campaigns.
+
+Now let's analyze how genders are distributed when we consider campaign and age range simultaneously.
+
+```R
+# General distribution by gender
+df %>% 
+  group_by(gender) %>% 
+  summarise(total = n())
+```
+
+## Gender Balance
+
+The distribution between genders is quite balanced, with a slightly higher numbers of ads going towards the **male** audience.
+
+Now let's break it down by campaign.
+
+```R
+# Gender distribution by campaign
+df %>% 
+  group_by(xyz_campaign_id, gender) %>% 
+  summarise(total = n(), .groups = "drop_last") %>% 
+  mutate(percentage = round(total * 100 / sum(total), 2))
+```
+
+## Difference in Campaign 936
+
+Only **Campaign 936** shows a higher overall percentage of **women** with **55.2%** of ads being directed towards **women**.
+
+What if we include age ranges in this analysis?
