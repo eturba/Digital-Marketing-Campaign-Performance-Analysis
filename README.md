@@ -432,3 +432,472 @@ top_interest_codes %>% print()
 ```
 
 Now, we will create a heat map showing the CPA for each interest in relation to the age group that it was targeting. This graph will hopefully provide us insights into what interests performed better or worse for certain age groups.
+
+```R
+# Heatmap: Interest x age x campaign saturation
+cpa_colors <- c("#1a9641", "#ffffbf", "#d7191c")
+
+df %>% 
+  filter(interest %in% top_interest_codes) %>% 
+  group_by (xyz_campaign_id, interest, age) %>% 
+  summarise(
+    cpa = sum(Spent) / sum(Approved_Conversion),
+    sales = sum(Approved_Conversion),
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(x = age, y = as.factor(interest), fill = cpa)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = sales), color = "black", size = 3, fontface = "bold") +
+  facet_wrap(~ xyz_campaign_id) +
+  scale_fill_gradientn(
+    colors = cpa_colors,
+    name = "CPA ($)"
+  ) +
+  labs(
+    title = "Saturation: Interest x Age x Campaign",
+    subtitle = "Color: Cost per Sale (Green = Cheap, Red = Expensive)\nNumber: Total Sales",
+    y = "Interests (Top 5)",
+    x = "Age Range"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+## Identified Pattern: 30-34 Range
+
+The **30-34 years** range seems to perform consistently better across all campaigns, converting more with a lower CPA.
+
+We need to drill down to the individual ad level to see if there are extremely expensive ads that don't generate returns and waste XYZ company resources.
+
+## Ad Classification by Performance
+
+I adopted the following classification for each ad using the **base average CPA (\~\$40)** and the number of conversions:
+
+-   **Zombie (Spends and doesn't sell)**: Didn't convert anyone and cost more than \$50
+-   **Star (Cheap)**: Produced sales & CPA below base average
+-   **Expensive (Needs Optimization):**: Produced sales & CPA above base average
+-   **In Test**: Spending too low to classify
+
+Now let's aggregate the data set and classify each ad into one of the four above categories. After that is complete, we will create a visualization showing the total sales for each individual ad along with the amount spent on each ad.Specifically, we are looking for **Zombie Ads** which are wasting the company money. Any Zombie ad should be paused immediately.
+
+```R
+# Data aggregation by ad
+df_ads <- df %>% 
+  group_by(ad_id, xyz_campaign_id) %>% 
+  summarise(
+    spent = sum(Spent),
+    impressions = sum(Impressions),
+    clicks = sum(Clicks),
+    sales = sum(Approved_Conversion),
+    ctr = (sum(Clicks) / sum(Impressions)) * 100,
+    cpa = ifelse(sales > 0, spent / sales, NA),
+    .groups = "drop"
+  )
+
+# Ad classification
+df_ads <- df_ads %>% 
+  mutate(
+    status = case_when(
+      (sales == 0 & (spent > 50 | is.na(spent))) ~ "Zombie (Spends and doesn't sell)",
+      cpa < 40 ~ "Star (Cheap)",
+      cpa >= 40 ~ "Expensive (Needs Optimization)",
+      TRUE ~ "In Test (Low Relative Spending)"
+    )
+  )
+
+# Visualization: Ad audit
+df_ads %>% 
+  filter(spent > 0) %>%  
+  ggplot(aes(x = spent, y = sales, color = status)) +
+  geom_point(alpha = 0.6, size = 2) +
+  facet_wrap(~ xyz_campaign_id, scales = "free") +
+  scale_color_manual(values = c(
+    "Star (Cheap)" = "green4",
+    "Expensive (Needs Optimization)" = "orange",
+    "Zombie (Spends and doesn't sell)" = "red",
+    "In Test (Low Relative Spending)" = "grey"
+  )) +
+  labs(
+    title = "Ad Audit (ad_id)",
+    subtitle = "Red dots should be paused immediately",
+    x = "Total Investment ($)",
+    y = "Total Sales"
+  ) +
+  theme_minimal()
+```
+
+## Alert: Zombie Ads
+
+There are many ads to pause in **Campaign 1178** and several to optimize. **Campaign 936** also has a significant number of problematic ads.
+
+Let's list the zombie ads with a recommendation to completely pause them, and segment the "star" ads to understand where we got it right. First, we'll count the quantity and total spent for the zombie ads for each campaign.
+
+```R
+# Counting zombie ads by campaign 
+df_ads %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  group_by(xyz_campaign_id) %>% 
+  summarise(
+    qty_zombies = n(),
+    total_spent = sum(spent)
+  )
+```
+
+## Savings Opportunity
+
+If XYZ company paused **today** all **87 zombie ads**, the immediate savings would be **\$10,442**.
+
+Let's examine the top 10 to identify the biggest wasters.
+
+```R
+# Top 10 zombie ads by spending
+df_ads %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  arrange(desc(spent)) %>% 
+  select(ad_id, xyz_campaign_id, spent, impressions, clicks) %>% 
+  head(10)
+```
+
+## Waste Concentration
+
+The **top 10** zombie ads represent just over **30% of total spending** wasted in this category. That is a lot of waste centered around a few specific ads.
+
+Let's dig deeper and determine if there is a difference in demographic profile between who the star ads and the zombie ads are targeting. We've already determined that the **30-34 years** range is promising, I wonder if the star ads targeted more of the younger audience while the zombie ads targeted the higher age range.
+
+We will create a visualization to compare the two types of ads by the age range they targeted and the gender.
+
+```R
+# Joining original data with status classification
+df_classified <- df %>% 
+  inner_join(df_ads %>%  select(ad_id, status, cpa), by = "ad_id")
+
+# Comparison: Stars vs Zombies by demographic profile
+df_classified %>% 
+  filter(status %in% c("Star (Cheap)", "Zombie (Spends and doesn't sell)")) %>% 
+  group_by(status, age, gender) %>% 
+  summarise(total = n(), .groups = "drop") %>% 
+  ggplot(aes(x = age, y = total, fill = gender)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ status) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Battle of Profiles: Stars vs Zombies",
+    subtitle = "Where are Zombies missing the mark? (Probabely wrong audience)",
+    y = "Number of Ads Run",
+    x = "Age Range"
+  ) +
+  theme_minimal()
+```
+
+## Clear Demographic Pattern
+
+Our hypothesis seems to be correct:
+
+**Star Ads**:
+
+-   Target the **30-34 years** range (already identified earlier as promising)
+-   Focus more on **male** audience
+
+**Zombie Ads**:
+
+-   Focus a higher percentage on the **40-49 years** range (compared to the star ads)
+-   Focus more on the **female** audience overall
+
+This suggests the problem could be either the age range or the gender they are targeting.
+
+Given the significant disparity in the age range that each type of ad targeted, I hypothesize the problem relates more towards the age range the ads are targeting compared to the gender.
+
+Let's now analyze how Star and Zombie ads differ in **interest** segmentation.
+
+We will first group the top 10 interests by the amount invested for each type of ad (Star & Zombie). Then we will visualize if the highest investments were in similar interests for the star and zombie ads.
+
+```R
+# Identification of top 10 interests in each cluster
+top_interest_stars <- df_classified %>% 
+  filter(status == "Star (Cheap)") %>% 
+  group_by(interest) %>% 
+  summarise(value = sum(Approved_Conversion)) %>% 
+  mutate(
+    type = "Stars (Focus: Sales)",
+    share = value / sum(value)
+  ) %>% 
+  slice_max(share, n = 10)
+
+top_interests_zombies <- df_classified %>% 
+  filter(status == "Zombie (Spends and doesn't sell)") %>% 
+  group_by(interest) %>% 
+  summarise(value = sum(Spent)) %>% 
+  mutate(
+    type = "Zombies (Focus: Waste)",
+    share = value / sum(value)
+  ) %>% 
+  slice_max(share, n = 10)
+
+# Ordering based on star success
+interest_order <- top_interest_stars %>% 
+  arrange(share) %>% 
+  pull(interest)
+
+
+# Data preparation for visualization
+plot_data <- bind_rows(top_interest_stars, top_interests_zombies) %>% 
+  mutate(interest = factor(interest, levels = interest_order)) %>% 
+  filter(!is.na(interest))
+
+# Comparative visualization
+ggplot(plot_data, aes(x = interest, y = share, fill = type)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ type, scales = "free_x") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("forestgreen", "firebrick")) +
+  labs(
+    title = "Share Comparison: Where Do Resources Go?",
+    subtitle = "Interests ordered by Star success\nSee if your Top Sellers are also the biggest wastes in Zombies",
+    x = "Interest Code (Ordered by Success)",
+    y = "Share (%)",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Interest Overlap
+
+It's notable that the **top 4 spending percentages** for Star ads were also high spenders for Zombie ads.This is especially evident with **Interest 16** which was the largest spender for the Star ads and was also about 10% of the investment for Zombie ads.
+
+This reinforces the idea that the differences in success between the two groups of ads is due to the difference in **age segmentation** (40-49 years vs 30-34 years), not the interests themselves.
+
+Let's identify which interests work well when properly segmented but fail when applied to the wrong audience. In order to do this, we will make a matrix graph which shows the **risk vs reward** for interests
+
+**X-axes (Stars)** - How good this interest is when it works
+
+**Y-axis (Zombies)** - How expensive this interest is when it fails
+
+Each point will show us **when this interest works, how much do we gain and when it doesn’t, how much do we burn?**
+
+```R
+# Identification of common interests between stars and zombies
+common_interests <- df_classified %>% 
+  group_by(interest) %>% 
+  summarise(
+    star_sales = sum(Approved_Conversion[status == "Star (Cheap)"]),
+    zombie_spent = sum(Spent[status == "Zombie (Spends and doesn't sell)"]),
+    .groups = "drop"
+  ) %>% 
+  filter(star_sales > 0, zombie_spent > 0)
+
+# Median calucation for quadrants
+median_sales <- median(common_interests$star_sales)
+median_spent <- median(common_interests$zombie_spent)
+
+# Visualization: Potential vs waste matrix
+ggplot(common_interests, aes(x = star_sales, y = zombie_spent)) +
+  annotate("rect", xmin = median_sales, xmax = Inf, ymin = median_spent, ymax = Inf,
+           fill = "orange", alpha = 0.1) +
+  annotate("rect", xmin = median_sales, xmax = Inf, ymin = -Inf, ymax = median_spent,
+           fill = "green", alpha = 0.1) +
+  geom_point(color = "purple", size = 3, alpha = 0.7) +
+  geom_text(aes(label = interest), vjust = -0.5, size = 3, check_overlap = TRUE) +
+  geom_vline(xintercept = median_sales, linetype = "dashed") +
+  geom_hline(yintercept = median_spent, linetype = "dashed") +
+  annotate("text", x = max(common_interests$star_sales),
+           y = max(common_interests$zombie_spent),
+           label = "Adjust Segmentation", hjust = 1, vjust = 1,
+           fontface = "bold", size = 3) +
+  annotate("text", x = max(common_interests$star_sales), y = 0,
+           label = "Scale", hjust = 1, vjust = 0, fontface = "bold", size = 3) +
+  labs(
+    title = "Common Interests Matrix: Where to Adjust?",
+    subtitle = "X-axis: Sales Potential (Stars) | Y-axis: Cost of Error (Zombies)",
+    x = "Sales Volume (When It Works)",
+    y = "Money Wasted (When It Fails)"
+  ) +
+  theme_minimal()
+```
+
+## Critical Insights
+
+Based on the graph, we can identify how successful the interests are and answer the question of **which interests are failing because they’re bad and which are failing because they’re misused?**
+
+We'll want to characterize each interest by the following:
+
+-   **Bad interests** → cut them
+
+-   **Good but misused interests** → adjust segmentation
+
+-   **Good and efficient interests** → scale hard
+
+Let's look at each quadrant specifically:
+
+**Bottom-right — Scale**
+
+-   **High sales, low waste**
+-   These interests convert well and don't burn much budget when they fail
+-   We should look to increase spending on these interests
+
+**Top-right — Adjust Segmentation**
+
+-   **High sales, high waste**
+-   These interests can clearly work but are expensive when they are mis-targeted
+-   We should look to tighten targeting around these interests
+
+**Bottom-left — Ignore or deprioritize**
+
+-   **Low sales, low waste**
+-   These interests are safe but unimpactful
+-   We are fine to pause or keep with minimal budget
+
+**Top-left — Cut**
+
+-   **Low sales, high waste**
+-   Limited upside and real downside
+-   We should kill off or completely rethink these interests
+
+## Statistical Validation: Difference by Age Range
+
+Next, let's look to see if we can validate our observation that the **30-34** age range performs better than the other age ranges. To do so, we will determine if the **30-34** age range is **statistically different** from the others in terms of conversion rate.
+
+```R
+# Data preparation for statistical test
+age_data_general <- df %>% 
+  group_by(age) %>% 
+  summarise(
+    sales = sum(Approved_Conversion),
+    non_sales = sum(Clicks) - sum(Approved_Conversion),
+    total_attempts = sum(Clicks)
+  )
+
+sales <- age_data_general$sales
+attempts <- age_data_general$total_attempts
+
+names(sales) <- age_data_general$age
+names(attempts) <- age_data_general$total_attempts
+
+# Pairwise proportion test with Bonferroni correction
+age_test_corrected <- pairwise.prop.test(
+  x = sales,
+  n = attempts,
+  p.adjust.method = "bonferroni"
+)
+
+print(age_test_corrected)
+```
+
+## Result: Statistical Difference Confirmed
+
+The **30-34 years** range is **statistically different** from other age ranges in terms of conversion rate (p \< 0.05 after Bonferroni correction) so we can reject the null hypothesis.
+
+This validates our previous qualitative observation.
+
+## Statistical Validation: Difference by Gender
+
+Now let's do a separate statistical test to determine if there is a significant difference in **CPA trend** between genders?
+
+```R
+# Data preparation (only ads that converted)
+cpa_gender_data <- df %>% 
+  filter(Approved_Conversion > 0) %>% 
+  mutate(cpa = Spent / Approved_Conversion)
+
+# Kruskal-Wallis non-parametric test
+kruskal.test(cpa ~ gender, data = cpa_gender_data)
+```
+
+```R
+# Visualization of CPA distribution by gender
+ggplot(cpa_gender_data, aes(x = gender, y = cpa)) +
+  geom_boxplot(fill = c("#F8766D", "#00BFC4"), alpha = 0.7) +
+  labs(
+    title = "Statistical Distribution of CPA by Gender",
+    x = "Gender",
+    y = "CPA ($)"
+  ) +
+  theme_minimal()
+```
+
+## Result: Cost Difference by Gender
+
+There is **statistical evidence** that **females** costs more than **males** to convert (p \< 0.05).
+
+It would be a smart idea to target **males** more heavily going forward.
+
+# Executive Report: Conclusions and Recommendations
+
+## 1. Executive Summary
+
+Data analysis identified that **Campaign 1178** shows a cost per sale drastically higher than other campaigns. The higher cost is not due to the marketing channel itself, but do to the **inefficiency in audience segmentation** and the **usage of ineffective ads**.
+
+There is a clear opportunity to **reduce costs while maintaining sales volume** by concentrating the budget on proven buyer demographic profiles.
+
+## 2. Problem Diagnosis
+
+We identified three main factors draining the company's budget:
+
+### 2.1. Demographic Dispersion
+
+**Campaign 1178** is spending significant budget on the **40-49 years** age range. Statistical tests confirm this group does not convert sales as efficiently as the **30-34 years** age range.
+
+### 2.2. Ads with Total Waste
+
+We mapped a group of **87 ads** (identified as "Zombies") that consistently consume budget without having generated **any sales**. The accumulation of these expenses represents **\$10,442** of total waste, with the top 10 accounting for **30%** of this amount.
+
+### 2.3. Inadequate Interest Segmentation
+
+Several interests that **work well** for the younger audience (30-34 years) are being shown to older audiences, where they don't perform, generating a **false negative** about the quality of these interests.
+
+## 3. High Performance Profile
+
+The ideal customer profile, which brings the **highest return on investment**, has the following characteristics:
+
+### Ideal Target Audience Characteristics:
+
+-   **Age Range**: **30 to 34 years** (statistically superior performance to all other ranges)
+-   **Behavior**: Specific interests (codes 29, 16, 10, 15, 20) when targeted to this young audience have shown to convert at low cost and at high frequency)
+-   **Gender Differentiation**: There is a statistically significant difference in CPA between genders, which should be considered in allocation
+
+## 4. Recommended Action Plan
+
+### 4.1. Short-Term Actions (Immediate Implementation)
+
+a)  Pause Inefficient Ads
+
+**Estimated savings: \$10,442**
+
+-   Immediately stop running the **87 Zombie ads** listed in the technical report
+-   Prioritize the top 10 that account for 30% of waste
+
+b)  Age Restriction
+
+-   Change **Campaign 1178** configuration to **exclude** ad display for the **40 to 49 years** range
+-   This range showed high cost without proportional return
+
+### 4.2. Medium-Term Actions (Strategic)
+
+a)  Budget Reallocation
+
+-   Direct the budget saved from the above actions to **intensify exposure** in the **30 to 34 years** range, where the probability of sale is proven higher
+
+b)  Focused Segmentation
+
+-   Create **new ad sets** focusing on the high-performance interests (29, 16, 10, 15, 20)
+-   Restrict these ads **exclusively to the 30 to 34 years audience** to avoid new waste
+-   Consider CPA difference by gender in proportional budget allocation (more budget to the male audience).
+
+c)  Continuous Testing and Learning
+
+-   Implement weekly monitoring of ads classified as "Expensive"
+-   Establish a **\$50 test spending limit** before classifying an ad as Zombie
+-   Create a quarterly review process to identify new promising interests
+
+## 5. Expected Impact
+
+With full implementation of recommendations, we estimate:
+
+-   **Immediate cost reduction**: \~\$10,442 (Zombie pause)
+-   **CPA improvement**: 40-50% reduction by focusing on 30-34 audience
+-   **Maintenance or increase in sales volume**: Through intelligent budget reallocation
+-   **Improved ROI**: Concentration on proven profitable segments
